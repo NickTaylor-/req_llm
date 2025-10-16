@@ -280,6 +280,8 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
     tool_choice = encode_tool_choice(opts_map[:tool_choice])
     reasoning = encode_reasoning_effort(provider_opts[:reasoning_effort])
 
+    text_format = encode_text_format(provider_opts[:response_format])
+
     body =
       Map.new()
       |> Map.put("model", model_name)
@@ -289,6 +291,7 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       |> maybe_put_string("reasoning", reasoning)
       |> maybe_put_string("tools", tools)
       |> maybe_put_string("tool_choice", tool_choice)
+      |> maybe_put_string("text", text_format)
 
     if previous_response_id do
       Map.put(body, "previous_response_id", previous_response_id)
@@ -616,6 +619,22 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
   defp encode_reasoning_effort(effort) when is_binary(effort), do: %{"effort" => effort}
   defp encode_reasoning_effort(_), do: nil
 
+  @doc false
+  def encode_text_format(nil), do: nil
+
+  def encode_text_format(%{type: "json_schema", json_schema: json_schema}) do
+    # ResponsesAPI expects a flattened structure:
+    # text.format.{type, name, strict, schema} instead of text.format.json_schema.{name, strict, schema}
+    %{
+      "format" => %{
+        "type" => "json_schema",
+        "name" => json_schema[:name],
+        "strict" => json_schema[:strict],
+        "schema" => json_schema[:schema]
+      }
+    }
+  end
+
   defp decode_responses_success({req, resp}) do
     body = ReqLLM.Provider.Utils.ensure_parsed_body(resp.body)
 
@@ -646,6 +665,9 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       metadata: %{response_id: body["id"]}
     }
 
+    # Extract and validate object for :object operations (json_schema mode)
+    object = maybe_extract_object(req, text)
+
     response = %ReqLLM.Response{
       id: body["id"] || "unknown",
       model: body["model"] || req.options[:model],
@@ -653,6 +675,7 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
         messages: if(content_parts == [] and is_nil(msg.tool_calls), do: [], else: [msg])
       },
       message: msg,
+      object: object,
       stream?: false,
       stream: nil,
       usage: usage,
@@ -665,6 +688,56 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
 
     {req, %{resp | body: merged_response}}
   end
+
+  # Extract and validate structured object from json_schema responses
+  defp maybe_extract_object(req, text) do
+    case req.options[:operation] do
+      :object ->
+        compiled_schema = req.options[:compiled_schema]
+
+        # If we have text content, try to parse it as JSON
+        if text != "" and text != nil do
+          case Jason.decode(text) do
+            {:ok, parsed_object} when is_map(parsed_object) ->
+              # Validate against schema if available
+              case validate_object(parsed_object, compiled_schema) do
+                {:ok, _} -> parsed_object
+                {:error, _} -> nil
+              end
+
+            _ ->
+              nil
+          end
+
+          # No text content
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp validate_object(object, compiled_schema) when not is_nil(compiled_schema) do
+    # compiled_schema is a NimbleOptions schema, validate directly
+    # Convert string keys to atoms for validation
+    keyword_data =
+      object
+      |> Enum.map(fn {k, v} ->
+        key = if is_binary(k), do: String.to_existing_atom(k), else: k
+        {key, v}
+      end)
+
+    case NimbleOptions.validate(keyword_data, compiled_schema) do
+      {:ok, _validated} -> {:ok, object}
+      {:error, _} -> {:error, :validation_failed}
+    end
+  rescue
+    ArgumentError ->
+      # String keys don't exist as atoms
+      {:error, :invalid_keys}
+  end
+
+  defp validate_object(object, nil), do: {:ok, object}
 
   defp aggregate_output_segments(body, segments) do
     texts = [
