@@ -692,35 +692,32 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
   end
 
   # Extract and validate structured object from json_schema responses
-  defp maybe_extract_object(req, text) when is_binary(text) do
-    case req.options[:operation] do
-      :object ->
+  defp maybe_extract_object(req, text) do
+    case {req.options[:operation], text} do
+      {:object, text} when is_binary(text) and text != "" ->
         compiled_schema = req.options[:compiled_schema]
 
-        if text == "" do
-          {nil, %{}}
-        else
-          case Jason.decode(text) do
-            {:ok, parsed_object} when is_map(parsed_object) ->
-              case validate_object(parsed_object, compiled_schema) do
-                {:ok, _} -> {parsed_object, %{}}
-                {:error, reason} -> {nil, %{object_parse_error: reason}}
-              end
+        case Jason.decode(text) do
+          {:ok, parsed_object} when is_map(parsed_object) ->
+            case validate_object(parsed_object, compiled_schema) do
+              {:ok, _} -> {parsed_object, %{}}
+              {:error, reason} -> {nil, %{object_parse_error: reason}}
+            end
 
-            {:error, _} ->
-              {nil, %{object_parse_error: :invalid_json}}
+          {:error, _} ->
+            {nil, %{object_parse_error: :invalid_json}}
 
-            _ ->
-              {nil, %{object_parse_error: :not_an_object}}
-          end
+          _ ->
+            {nil, %{object_parse_error: :not_an_object}}
         end
+
+      {:object, _} ->
+        {nil, %{}}
 
       _ ->
         nil
     end
   end
-
-  defp maybe_extract_object(_req, _text), do: nil
 
   defp validate_object(object, compiled_schema) when not is_nil(compiled_schema) do
     # compiled_schema is a NimbleOptions schema, validate directly
