@@ -665,8 +665,10 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       metadata: %{response_id: body["id"]}
     }
 
-    # Extract and validate object for :object operations (json_schema mode)
-    object = maybe_extract_object(req, text)
+    {object, object_meta} = maybe_extract_object(req, text) || {nil, %{}}
+
+    base_provider_meta = Map.drop(body, ["id", "model", "output_text", "output", "usage"])
+    provider_meta = Map.merge(base_provider_meta, object_meta)
 
     response = %ReqLLM.Response{
       id: body["id"] || "unknown",
@@ -680,7 +682,7 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       stream: nil,
       usage: usage,
       finish_reason: finish_reason,
-      provider_meta: Map.drop(body, ["id", "model", "output_text", "output", "usage"])
+      provider_meta: provider_meta
     }
 
     ctx = req.options[:context] || %ReqLLM.Context{messages: []}
@@ -695,25 +697,30 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       :object ->
         compiled_schema = req.options[:compiled_schema]
 
-        # If we have text content, try to parse it as JSON
         if text != "" do
           case Jason.decode(text) do
             {:ok, parsed_object} when is_map(parsed_object) ->
-              # Validate against schema if available
               case validate_object(parsed_object, compiled_schema) do
-                {:ok, _} -> parsed_object
-                {:error, _} -> nil
+                {:ok, _} -> {parsed_object, %{}}
+                {:error, reason} -> {nil, %{object_parse_error: reason}}
               end
 
+            {:error, _} ->
+              {nil, %{object_parse_error: :invalid_json}}
+
             _ ->
-              nil
+              {nil, %{object_parse_error: :not_an_object}}
           end
+        else
+          {nil, %{}}
         end
 
       _ ->
         nil
     end
   end
+
+  defp maybe_extract_object(_req, _text), do: nil
 
   defp validate_object(object, compiled_schema) when not is_nil(compiled_schema) do
     # compiled_schema is a NimbleOptions schema, validate directly
