@@ -690,13 +690,13 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
   end
 
   # Extract and validate structured object from json_schema responses
-  defp maybe_extract_object(req, text) do
+  defp maybe_extract_object(req, text) when is_binary(text) do
     case req.options[:operation] do
       :object ->
         compiled_schema = req.options[:compiled_schema]
 
         # If we have text content, try to parse it as JSON
-        if text != "" and text != nil do
+        if text != "" do
           case Jason.decode(text) do
             {:ok, parsed_object} when is_map(parsed_object) ->
               # Validate against schema if available
@@ -708,8 +708,6 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
             _ ->
               nil
           end
-
-          # No text content
         end
 
       _ ->
