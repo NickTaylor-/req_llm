@@ -697,7 +697,9 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       :object ->
         compiled_schema = req.options[:compiled_schema]
 
-        if text != "" do
+        if text == "" do
+          {nil, %{}}
+        else
           case Jason.decode(text) do
             {:ok, parsed_object} when is_map(parsed_object) ->
               case validate_object(parsed_object, compiled_schema) do
@@ -711,8 +713,6 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
             _ ->
               {nil, %{object_parse_error: :not_an_object}}
           end
-        else
-          {nil, %{}}
         end
 
       _ ->
